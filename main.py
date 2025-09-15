@@ -1,4 +1,3 @@
-
 import os
 import threading
 import time
@@ -77,6 +76,32 @@ def get_user_info(user):
     username = f"@{user.username}" if user and user.username else "No username"
     full_name = user.full_name if user else "Unknown"
     return user_id, username, full_name
+
+
+async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش اطلاعات دیباگ برای ادمین"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    debug_text = f"""
+🔧 **اطلاعات ربات:**
+📊 کاربران: {len(user_database)}
+📨 پیام‌ها: {message_count}
+⏳ Pending: {len(pending_replies)}
+🆔 Admin ID: {ADMIN_ID}
+
+👥 **کاربران:**
+"""
+    
+    for uid, data in user_database.items():
+        debug_text += f"• {uid}: {data['full_name']} ({data['username']})\n"
+    
+    if pending_replies:
+        debug_text += f"\n⏳ **در انتظار پاسخ:**\n"
+        for admin_id, target_id in pending_replies.items():
+            debug_text += f"• Admin {admin_id} → User {target_id}\n"
+    
+    await update.message.reply_text(debug_text)
 
 
 def update_user_database(user):
@@ -208,6 +233,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(
                 f"✍️ حالا متنت رو بنویس، من می‌فرستم برای {target_user_id}"
             )
+            print(f"🔄 Admin entered reply mode for user {target_user_id}")
         except Exception as e:
             await query.message.reply_text("❌ خطا در پردازش دکمه ریپلای")
             print("Callback handling error:", e)
@@ -218,21 +244,37 @@ async def admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message is None:
         return
 
+    # فقط برای ادمین
     if update.effective_user.id != ADMIN_ID:
-        return  # فقط ادمین
+        return
 
+    # اگر ادمین در حالت pending نباشه، نادیده بگیر تا handler بعدی کار کنه
     if ADMIN_ID not in pending_replies:
-        await update.message.reply_text("❌ ابتدا روی دکمه Reply کلیک کنید")
         return
 
     target_user_id = pending_replies[ADMIN_ID]
 
     try:
-        await context.bot.send_message(chat_id=target_user_id, text=update.message.text)
+        # پشتیبانی از انواع مختلف پیام
+        if update.message.text:
+            await context.bot.send_message(chat_id=target_user_id, text=update.message.text)
+        elif update.message.photo:
+            photo = update.message.photo[-1]
+            await context.bot.send_photo(chat_id=target_user_id, photo=photo.file_id, caption=update.message.caption)
+        elif update.message.voice:
+            await context.bot.send_voice(chat_id=target_user_id, voice=update.message.voice.file_id)
+        elif update.message.document:
+            await context.bot.send_document(chat_id=target_user_id, document=update.message.document.file_id, caption=update.message.caption)
+        else:
+            await update.message.reply_text("❌ نوع پیام پشتیبانی نشده")
+            return
+        
         await update.message.reply_text(f"✅ پیام برای {target_user_id} ارسال شد")
+        print(f"✅ Admin replied to user {target_user_id}")
+        
     except Exception as e:
         await update.message.reply_text(f"❌ خطا در ارسال پیام: {e}")
-        print("Error sending admin message:", e)
+        print(f"❌ Error sending admin message to {target_user_id}: {e}")
 
     # حذف pending بعد از ارسال
     del pending_replies[ADMIN_ID]
@@ -257,6 +299,7 @@ async def reply_to_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await context.bot.send_message(chat_id=target_user_id, text=reply_message)
         await update.message.reply_text("✅ پیام ارسال شد")
+        print(f"✅ Direct reply sent to user {target_user_id}")
     except Exception as e:
         await update.message.reply_text(f"❌ خطا در ارسال پیام: {e}")
         print("reply cmd error:", e)
@@ -280,9 +323,14 @@ def run_bot():
 
         telegram_app.add_handler(CommandHandler("start", start))
         telegram_app.add_handler(CommandHandler("reply", reply_to_user_cmd))
+        telegram_app.add_handler(CommandHandler("debug", debug_info))
         telegram_app.add_handler(CallbackQueryHandler(button_callback))
-        telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
+        
+        # ابتدا handler پیام‌های ادمین (اولویت بالاتر)
         telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_message))
+        
+        # سپس handler پیام‌های عمومی
+        telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
 
         print("✅ Bot handlers registered successfully")
         print("🚀 Starting bot polling...")
@@ -309,3 +357,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
