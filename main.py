@@ -4,8 +4,8 @@ import time
 import requests
 from datetime import datetime
 from flask import Flask
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 # متغیرهای محیطی
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -23,6 +23,9 @@ print(f"✅ Admin ID: {ADMIN_ID}")
 user_database = {}
 start_time = datetime.now()
 message_count = 0
+
+# ذخیره وضعیت پاسخ ادمین (از کد دوم)
+pending_replies = {}
 
 # Flask app برای health check
 app = Flask(__name__)
@@ -105,6 +108,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # به‌روزرسانی پایگاه داده کاربران
     update_user_database(user)
     
+    # ایجاد دکمه پاسخ سریع برای ادمین
+    keyboard = [[InlineKeyboardButton(f"Reply to {user_id}", callback_data=f"reply_{user_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     # ارسال اطلاعات کاربر به ادمین
     start_info = (
         f"🆕 کاربر جدید دستور /start زد:\n\n"
@@ -112,11 +119,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🆔 آیدی: {user_id}\n"
         f"📝 نام کاربری: {username}\n"
         f"⏰ زمان: {current_time}\n\n"
-        f"💬 برای پاسخ: /reply {user_id} پیام شما"
+        f"💬 برای پاسخ کلیک کنید یا: /reply {user_id} پیام شما"
     )
     
     try:
-        await context.bot.send_message(chat_id=int(ADMIN_ID), text=start_info)
+        await context.bot.send_message(
+            chat_id=int(ADMIN_ID), 
+            text=start_info,
+            reply_markup=reply_markup
+        )
         print(f"✅ New user notification sent to admin for user {user_id}")
     except Exception as e:
         print(f"❌ Error sending to admin: {e}")
@@ -131,6 +142,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message is None:
         return
     
+    # بررسی اینکه آیا پیام از ادمین است و در حالت پاسخ است
+    admin_id = str(update.effective_user.id)
+    if admin_id == str(ADMIN_ID) and int(admin_id) in pending_replies:
+        # پیام ادمین در حالت پاسخ
+        target_user_id = pending_replies[int(admin_id)]
+        try:
+            await context.bot.send_message(chat_id=target_user_id, text=update.message.text)
+            await update.message.reply_text(f"✅ پیام برای {target_user_id} ارسال شد")
+            del pending_replies[int(admin_id)]
+            print(f"💬 Admin replied to user {target_user_id} via inline button")
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا در ارسال پیام: {str(e)}")
+            if int(admin_id) in pending_replies:
+                del pending_replies[int(admin_id)]
+        return
+    
     message_count += 1
     user = update.effective_user
     user_id, username, full_name = get_user_info(user)
@@ -140,14 +167,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # اطلاعات کاربر برای همه پیام‌ها
     user_info = f"👤 {full_name} ({username} / {user_id})"
-    reply_instruction = f"\n\n💬 برای پاسخ: /reply {user_id} پیام شما"
+    
+    # ایجاد دکمه پاسخ سریع
+    keyboard = [[InlineKeyboardButton(f"Reply to {user_id}", callback_data=f"reply_{user_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
         if update.message.text:
             # پیام متنی
             msg_text = update.message.text
-            full_message = f"{user_info}:\n\n📝 {msg_text}{reply_instruction}"
-            await context.bot.send_message(chat_id=int(ADMIN_ID), text=full_message)
+            full_message = f"{user_info}:\n\n📝 {msg_text}\n\n💬 برای پاسخ: /reply {user_id} پیام شما"
+            await context.bot.send_message(
+                chat_id=int(ADMIN_ID), 
+                text=full_message,
+                reply_markup=reply_markup
+            )
             
         elif update.message.photo:
             # عکس
@@ -156,21 +190,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo_caption = f"{user_info}:\n\n📸 عکس"
             if caption:
                 photo_caption += f"\nکپشن: {caption}"
-            photo_caption += reply_instruction
             await context.bot.send_photo(
                 chat_id=int(ADMIN_ID), 
                 photo=photo.file_id, 
-                caption=photo_caption
+                caption=photo_caption,
+                reply_markup=reply_markup
             )
             
         elif update.message.voice:
             # پیام صوتی
             voice = update.message.voice
-            voice_caption = f"{user_info}:\n\n🎤 پیام صوتی{reply_instruction}"
+            voice_caption = f"{user_info}:\n\n🎤 پیام صوتی"
             await context.bot.send_voice(
                 chat_id=int(ADMIN_ID), 
                 voice=voice.file_id, 
-                caption=voice_caption
+                caption=voice_caption,
+                reply_markup=reply_markup
             )
             
         elif update.message.document:
@@ -181,19 +216,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             doc_caption = f"{user_info}:\n\n📄 فایل: {file_name}"
             if caption:
                 doc_caption += f"\nکپشن: {caption}"
-            doc_caption += reply_instruction
             await context.bot.send_document(
                 chat_id=int(ADMIN_ID), 
                 document=document.file_id, 
-                caption=doc_caption
+                caption=doc_caption,
+                reply_markup=reply_markup
             )
             
         else:
             # سایر انواع پیام
-            other_message = f"{user_info}:\n\n❓ نوع پیام پشتیبانی نشده{reply_instruction}"
+            other_message = f"{user_info}:\n\n❓ نوع پیام پشتیبانی نشده"
             await context.bot.send_message(
                 chat_id=int(ADMIN_ID), 
-                text=other_message
+                text=other_message,
+                reply_markup=reply_markup
             )
 
         # تأیید دریافت به کاربر
@@ -207,8 +243,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
+# وقتی ادمین دکمه ریپلای رو میزنه
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data.startswith("reply_"):
+        target_user_id = int(query.data.split("_")[1])
+        pending_replies[query.from_user.id] = target_user_id
+        
+        # بررسی وجود کاربر در پایگاه داده
+        if target_user_id in user_database:
+            user_info = user_database[target_user_id]
+            await query.message.reply_text(
+                f"✍️ پیام خود را برای {user_info['full_name']} ({user_info['username']}) بنویسید:"
+            )
+        else:
+            await query.message.reply_text(
+                f"✍️ پیام خود را برای کاربر {target_user_id} بنویسید:"
+            )
+
 async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پاسخ دادن به کاربر خاص توسط ادمین"""
+    """پاسخ دادن به کاربر خاص توسط ادمین (روش کلاسیک)"""
     if update.message is None or str(update.effective_user.id) != str(ADMIN_ID):
         return
     
@@ -240,7 +296,7 @@ async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ پیام به {user_info['full_name']} ({user_info['username']}) ارسال شد!"
         )
-        print(f"💬 Admin replied to user {target_user_id}")
+        print(f"💬 Admin replied to user {target_user_id} via command")
         
     except ValueError:
         await update.message.reply_text("❌ آیدی کاربر باید عدد باشد!")
@@ -324,6 +380,7 @@ def run_bot():
         telegram_app.add_handler(CommandHandler("reply", reply_to_user))
         telegram_app.add_handler(CommandHandler("users", list_users))
         telegram_app.add_handler(CommandHandler("broadcast", broadcast_message))
+        telegram_app.add_handler(CallbackQueryHandler(button_callback))
         telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
         
         print("✅ Bot handlers registered successfully")
@@ -337,7 +394,7 @@ def run_bot():
         raise
 
 def main():
-    print("🚀 Starting Telegram Bot with Flask Health Check...")
+    print("🚀 Starting Merged Telegram Bot with Flask Health Check...")
     print(f"⏰ Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # شروع Flask server در thread جداگانه
@@ -353,6 +410,4 @@ def main():
     run_bot()
 
 if __name__ == "__main__":
-
     main()
-
