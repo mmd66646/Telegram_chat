@@ -233,9 +233,8 @@ async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ارسال پیام به کاربر
         await context.bot.send_message(
             chat_id=target_user_id,
-            text=f"📨 پیام از ادمین:\n\n{reply_message}"
+            text=reply_message
         )
-        
         # تأیید برای ادمین
         user_info = user_database[target_user_id]
         await update.message.reply_text(
@@ -356,3 +355,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
