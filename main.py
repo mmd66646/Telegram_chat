@@ -111,10 +111,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ایجاد دکمه پاسخ سریع برای ادمین
     keyboard = [
     [
-        InlineKeyboardButton(f"Reply to {user_id}", callback_data=f"reply_{user_id}"),
-        InlineKeyboardButton("Open Chat", url=f"tg://openmessage?user_id={user_id}")
+        InlineKeyboardButton(
+            f"Reply to {user_id}",
+            callback_data=f"reply_{user_id}"
+        ),
+        InlineKeyboardButton(
+            "Open Chat",
+            url=f"tg://openmessage?user_id={user_id}"
+        )
     ]
 ]
+
 reply_markup = InlineKeyboardMarkup(keyboard)
     
     # ارسال اطلاعات کاربر به ادمین
@@ -416,4 +423,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
