@@ -1,7 +1,7 @@
+
 import os
 import threading
 import time
-import requests
 from datetime import datetime
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -21,7 +21,7 @@ ADMIN_ID_ENV = os.getenv("ADMIN_ID")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required")
 if not ADMIN_ID_ENV:
-    raise ValueError("ADMIN_ID environment variable is required")
+    raise ValueError("ADMIN_ID must be provided")
 
 try:
     ADMIN_ID = int(ADMIN_ID_ENV)
@@ -36,8 +36,8 @@ user_database = {}  # keys: int user_id
 start_time = datetime.now()
 message_count = 0
 
-# pending replies: نگهداری کاربری که ادمین قصد پاسخ دادن به او را دارد
-pending_replies = {}  # key: admin_user_id (int) -> value: target_user_id (int)
+# نگهداری کاربری که ادمین قصد پاسخ دادن به او را دارد
+pending_replies = {}  # key: ADMIN_ID -> value: target_user_id (int)
 
 # Flask app برای health check
 app = Flask(__name__)
@@ -47,7 +47,6 @@ app = Flask(__name__)
 def home():
     current_time = datetime.now()
     uptime = current_time - start_time
-
     return {
         "status": "🤖 Telegram Bot is Running!",
         "message": "Bot is online and ready to receive messages",
@@ -125,123 +124,60 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message is None:
         return
 
-    message_count += 1
     user = update.effective_user
-    user_id, username, full_name = get_user_info(user)
-    user_id = int(user_id)
+    user_id = int(user.id)
+
+    # جلوگیری از فوروارد پیام ادمین به خودش
+    if user_id == ADMIN_ID:
+        return
 
     update_user_database(user)
+    message_count += 1
 
     reply_instruction = "\n\n💬 برای پاسخ کلیک کنید یا از دکمه‌ها استفاده کنید."
 
     try:
+        # دکمه‌ها
+        keyboard = [
+            [
+                InlineKeyboardButton(f"Reply to {user_id}", callback_data=f"reply_{user_id}"),
+                InlineKeyboardButton("Open Chat", url=f"tg://openmessage?user_id={user_id}"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        full_name = user.full_name if user else "Unknown"
+        username = f"@{user.username}" if user and user.username else "No username"
+
         # متن پیام
         if update.message.text:
             msg_text = update.message.text
-            keyboard = [
-                [
-                    InlineKeyboardButton(
-                        f"Reply to {user_id}", callback_data=f"reply_{user_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "Open Chat", url=f"tg://openmessage?user_id={user_id}"
-                    ),
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
             full_message = f"👤 {full_name} ({username} / {user_id}):\n\n📝 {msg_text}{reply_instruction}"
-            await context.bot.send_message(
-                chat_id=ADMIN_ID, text=full_message, reply_markup=reply_markup
-            )
+            await context.bot.send_message(chat_id=ADMIN_ID, text=full_message, reply_markup=reply_markup)
 
         # عکس
         elif update.message.photo:
             photo = update.message.photo[-1]
             caption = update.message.caption or ""
-            keyboard = [
-                [
-                    InlineKeyboardButton(
-                        f"Reply to {user_id}", callback_data=f"reply_{user_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "Open Chat", url=f"tg://openmessage?user_id={user_id}"
-                    ),
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
             photo_caption = f"👤 {full_name} ({username} / {user_id}):\n\n📸 عکس\n\n{caption}"
-            await context.bot.send_photo(
-                chat_id=ADMIN_ID,
-                photo=photo.file_id,
-                caption=photo_caption,
-                reply_markup=reply_markup,
-            )
+            await context.bot.send_photo(chat_id=ADMIN_ID, photo=photo.file_id, caption=photo_caption, reply_markup=reply_markup)
 
         # صوت
         elif update.message.voice:
             voice = update.message.voice
-            keyboard = [
-                [
-                    InlineKeyboardButton(
-                        f"Reply to {user_id}", callback_data=f"reply_{user_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "Open Chat", url=f"tg://openmessage?user_id={user_id}"
-                    ),
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
             voice_caption = f"👤 {full_name} ({username} / {user_id}):\n\n🎤 پیام صوتی"
-            await context.bot.send_voice(
-                chat_id=ADMIN_ID,
-                voice=voice.file_id,
-                caption=voice_caption,
-                reply_markup=reply_markup,
-            )
+            await context.bot.send_voice(chat_id=ADMIN_ID, voice=voice.file_id, caption=voice_caption, reply_markup=reply_markup)
 
         # سند/فایل
         elif update.message.document:
             document = update.message.document
             caption = update.message.caption or ""
-            keyboard = [
-                [
-                    InlineKeyboardButton(
-                        f"Reply to {user_id}", callback_data=f"reply_{user_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "Open Chat", url=f"tg://openmessage?user_id={user_id}"
-                    ),
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            doc_caption = (
-                f"👤 {full_name} ({username} / {user_id}):\n\n📄 فایل: "
-                f"{document.file_name or 'فایل'}\n\n{caption}"
-            )
-            await context.bot.send_document(
-                chat_id=ADMIN_ID,
-                document=document.file_id,
-                caption=doc_caption,
-                reply_markup=reply_markup,
-            )
+            doc_caption = f"👤 {full_name} ({username} / {user_id}):\n\n📄 فایل: {document.file_name or 'فایل'}\n\n{caption}"
+            await context.bot.send_document(chat_id=ADMIN_ID, document=document.file_id, caption=doc_caption, reply_markup=reply_markup)
 
         else:
-            keyboard = [
-                [
-                    InlineKeyboardButton(
-                        f"Reply to {user_id}", callback_data=f"reply_{user_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "Open Chat", url=f"tg://openmessage?user_id={user_id}"
-                    ),
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
             other_message = f"👤 {full_name} ({username} / {user_id}):\n\n❓ نوع پیام پشتیبانی نشده"
-            await context.bot.send_message(
-                chat_id=ADMIN_ID, text=other_message, reply_markup=reply_markup
-            )
+            await context.bot.send_message(chat_id=ADMIN_ID, text=other_message, reply_markup=reply_markup)
 
         # تأیید برای کاربر
         try:
@@ -268,7 +204,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data and query.data.startswith("reply_"):
         try:
             target_user_id = int(query.data.split("_")[1])
-            pending_replies[query.from_user.id] = target_user_id
+            pending_replies[ADMIN_ID] = target_user_id  # استفاده از ADMIN_ID ثابت
             await query.message.reply_text(
                 f"✍️ حالا متنت رو بنویس، من می‌فرستم برای {target_user_id}"
             )
@@ -278,28 +214,32 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اگر ادمین در حالت pending_replies باشد، پیام ادمین به کاربر هدف فرستاده می‌شود"""
+    """ارسال پیام ادمین به کاربر هدف"""
     if update.message is None:
         return
 
-    admin_id = update.effective_user.id
-    if admin_id in pending_replies:
-        target_user_id = pending_replies[admin_id]
-        try:
-            await context.bot.send_message(
-                chat_id=target_user_id, text=update.message.text
-            )
-            await update.message.reply_text(
-                f"✅ پیام برای {target_user_id} ارسال شد"
-            )
-        except Exception as e:
-            await update.message.reply_text(f"❌ خطا در ارسال پیام: {e}")
-            print("Error sending admin message:", e)
-        del pending_replies[admin_id]
+    if update.effective_user.id != ADMIN_ID:
+        return  # فقط ادمین
+
+    if ADMIN_ID not in pending_replies:
+        await update.message.reply_text("❌ ابتدا روی دکمه Reply کلیک کنید")
+        return
+
+    target_user_id = pending_replies[ADMIN_ID]
+
+    try:
+        await context.bot.send_message(chat_id=target_user_id, text=update.message.text)
+        await update.message.reply_text(f"✅ پیام برای {target_user_id} ارسال شد")
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطا در ارسال پیام: {e}")
+        print("Error sending admin message:", e)
+
+    # حذف pending بعد از ارسال
+    del pending_replies[ADMIN_ID]
 
 
 async def reply_to_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """حفظ دستور /reply"""
+    """دستور /reply برای ادمین"""
     if update.message is None or update.effective_user.id != ADMIN_ID:
         return
 
@@ -313,13 +253,9 @@ async def reply_to_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user_id = int(context.args[0])
         reply_message = " ".join(context.args[1:])
         if target_user_id not in user_database:
-            await update.message.reply_text(
-                f"❌ کاربر با آیدی {target_user_id} یافت نشد!"
-            )
+            await update.message.reply_text(f"❌ کاربر با آیدی {target_user_id} یافت نشد!")
             return
-        await context.bot.send_message(
-            chat_id=target_user_id, text=reply_message
-        )
+        await context.bot.send_message(chat_id=target_user_id, text=reply_message)
         await update.message.reply_text("✅ پیام ارسال شد")
     except Exception as e:
         await update.message.reply_text(f"❌ خطا در ارسال پیام: {e}")
@@ -345,12 +281,8 @@ def run_bot():
         telegram_app.add_handler(CommandHandler("start", start))
         telegram_app.add_handler(CommandHandler("reply", reply_to_user_cmd))
         telegram_app.add_handler(CallbackQueryHandler(button_callback))
-        telegram_app.add_handler(
-            MessageHandler(filters.ALL & ~filters.COMMAND, handle_message)
-        )
-        telegram_app.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND, admin_message)
-        )
+        telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
+        telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_message))
 
         print("✅ Bot handlers registered successfully")
         print("🚀 Starting bot polling...")
